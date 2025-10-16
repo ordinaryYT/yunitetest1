@@ -1,3 +1,4 @@
+// bot-render-ready.js
 const express = require('express');
 const bodyParser = require('body-parser');
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
@@ -5,22 +6,29 @@ const { v4: uuidv4 } = require('uuid');
 const axios = require('axios');
 
 const app = express();
+
+// --- RENDER PORT OR LOCAL PORT ---
 const port = process.env.PORT || 3000;
 
+// --- MIDDLEWARE ---
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
-// Environment variables
+// --- ENV VARIABLES ---
 const discordToken = process.env.DISCORD_TOKEN;
 const epicClientId = process.env.EPIC_CLIENT_ID;
 const epicClientSecret = process.env.EPIC_CLIENT_SECRET;
 const channelId = process.env.DISCORD_CHANNEL_ID;
-const redirectUri = process.env.RENDER_EXTERNAL_URL ? `${process.env.RENDER_EXTERNAL_URL}/callback` : `http://localhost:${port}/callback`;
 
-// Queue for AHK commands
+// --- DYNAMIC REDIRECT URI ---
+const redirectUri = process.env.RENDER_EXTERNAL_URL 
+  ? `${process.env.RENDER_EXTERNAL_URL}/callback` 
+  : `http://localhost:${port}/callback`;
+
+// --- COMMAND QUEUE FOR AHK ---
 let commandQueue = [];
 
-// Discord Bot Setup
+// --- DISCORD BOT ---
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
 
 client.once('ready', () => {
@@ -36,10 +44,10 @@ client.on('messageCreate', async (message) => {
 
   if (command === '!addfriend') {
     if (!epicClientId || !epicClientSecret) {
-      return message.reply('Error: OAuth not configured.');
+      return message.reply('Epic OAuth not configured.');
     }
 
-    const oauthUrl = `https://www.epicgames.com/id/authorize?client_id=${epicClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=basic_profile+friends_list&state=${message.author.id}`;
+    const oauthUrl = `https://www.epicgames.com/id/authorize?client_id=${epicClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=basic_profile&state=${message.author.id}`;
 
     const embed = new EmbedBuilder()
       .setTitle('Add Fortnite Friend')
@@ -59,19 +67,19 @@ client.on('messageCreate', async (message) => {
 
 client.login(discordToken);
 
-// OAuth Callback
+// --- OAUTH CALLBACK ---
 app.get('/callback', async (req, res) => {
   const { code, state: discordId, error, error_description } = req.query;
 
   if (error) {
-    console.error('OAuth Error:', error, error_description);
+    console.error('OAuth error:', error, error_description);
     return res.send(`<h2>OAuth Error</h2><p>${error}: ${error_description || 'Unknown error'}</p>`);
   }
 
-  if (!code || !discordId) return res.send('Error: Missing code or Discord ID.');
+  if (!code || !discordId) return res.send('Missing code or Discord ID');
 
   try {
-    // Exchange code for access token
+    // --- EXCHANGE CODE FOR ACCESS TOKEN ---
     const tokenResponse = await axios.post(
       'https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token',
       new URLSearchParams({
@@ -86,7 +94,9 @@ app.get('/callback', async (req, res) => {
 
     const accessToken = tokenResponse.data.access_token;
 
-    // Fetch Epic account info
+    if (!accessToken) return res.send('Failed to get access token.');
+
+    // --- FETCH EPIC ACCOUNT INFO ---
     const userResponse = await axios.get(
       'https://account-public-service-prod03.ol.epicgames.com/account/api/public/account',
       { headers: { Authorization: `Bearer ${accessToken}` } }
@@ -94,22 +104,22 @@ app.get('/callback', async (req, res) => {
 
     const { displayName, id: epicId } = userResponse.data;
 
-    if (!displayName) return res.send('Error: Could not retrieve Fortnite username.');
+    if (!displayName) return res.send('Failed to get Epic username.');
 
-    // Send to Discord channel
+    // --- SEND TO DISCORD CHANNEL ---
     const channel = await client.channels.fetch(channelId).catch(() => null);
     if (channel) {
-      await channel.send(`New Fortnite friend request: **Username**: ${displayName}, **Epic ID**: ${epicId} (from Discord ID: ${discordId})`);
+      await channel.send(`New Fortnite friend request: **Username**: ${displayName}, **Epic ID**: ${epicId} (Discord ID: ${discordId})`);
     }
 
-    // Queue command for AHK
+    // --- QUEUE COMMAND FOR AHK ---
     const cmd = `add-friend ${displayName}`;
     const botname = 'sigmafish69';
     const id = uuidv4();
     commandQueue.push({ id, botname, command: cmd });
     console.log('Queued command:', { id, botname, command: cmd });
 
-    // Notify Discord user
+    // --- NOTIFY DISCORD USER ---
     const user = await client.users.fetch(discordId).catch(() => null);
     if (user) await user.send(`Your Fortnite username (${displayName}) has been queued for a friend request on bot ${botname}.`);
 
@@ -118,30 +128,26 @@ app.get('/callback', async (req, res) => {
       <p>Your Fortnite username (${displayName}) has been submitted.</p>
       <p>You will receive a confirmation in Discord.</p>
     `);
-
   } catch (err) {
-    console.error('OAuth error:', err.response?.data || err.message);
-    const errMsg = err.response?.data?.error_description || err.message || 'Failed to authenticate.';
-    res.send(`<h2>Authentication Failed</h2><p>${errMsg}</p>`);
+    console.error('OAuth Callback Error:', err.response?.data || err.message);
+    res.send(`<h2>Authentication Failed</h2><p>${err.response?.data?.error_description || err.message}</p>`);
   }
 });
 
-// AHK Endpoints
+// --- AHK ENDPOINTS ---
 app.get('/fetch-command', (req, res) => {
   if (commandQueue.length === 0) return res.json({});
-  const command = commandQueue[0];
-  res.json(command);
-  console.log('Sent command to AHK:', command);
+  res.json(commandQueue[0]);
 });
 
 app.post('/ack-command', (req, res) => {
   const { id } = req.body;
   if (!id) return res.status(400).send('Missing id');
   commandQueue = commandQueue.filter(cmd => cmd.id !== id);
-  console.log('Acknowledged command:', id);
   res.send('Acknowledged');
 });
 
+// --- START SERVER ---
 app.listen(port, () => {
   console.log(`Server listening on port ${port}`);
   console.log(`Redirect URI: ${redirectUri}`);
