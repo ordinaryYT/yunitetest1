@@ -1,154 +1,209 @@
-// bot-render-ready.js
-const express = require('express');
-const bodyParser = require('body-parser');
 const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
-const { v4: uuidv4 } = require('uuid');
+const express = require('express');
 const axios = require('axios');
+require('dotenv').config();
+
+const client = new Client({
+    intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.MessageContent
+    ]
+});
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-// --- RENDER PORT OR LOCAL PORT ---
-const port = process.env.PORT || 3000;
+// Epic Games OAuth Configuration
+const EPIC_CONFIG = {
+    clientId: process.env.EPIC_CLIENT_ID,
+    clientSecret: process.env.EPIC_CLIENT_SECRET,
+    redirectUri: process.env.REDIRECT_URI,
+    authUrl: 'https://www.epicgames.com/id/authorize',
+    tokenUrl: 'https://account-public-service-prod.ol.epicgames.com/account/api/oauth/token',
+    userInfoUrl: 'https://account-public-service-prod.ol.epicgames.com/account/api/oauth/verify',
+    fortniteServiceUrl: 'https://fortnite-public-service-prod11.ol.epicgames.com/fortnite/api'
+};
 
-// --- MIDDLEWARE ---
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: true }));
+// Store temporary data (use a database in production)
+const pendingAuths = new Map();
+const userConnections = new Map();
 
-// --- ENV VARIABLES ---
-const discordToken = process.env.DISCORD_TOKEN;
-const epicClientId = process.env.EPIC_CLIENT_ID;
-const epicClientSecret = process.env.EPIC_CLIENT_SECRET;
-const channelId = process.env.DISCORD_CHANNEL_ID;
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// --- DYNAMIC REDIRECT URI ---
-const redirectUri = process.env.RENDER_EXTERNAL_URL 
-  ? `${process.env.RENDER_EXTERNAL_URL}/callback` 
-  : `http://localhost:${port}/callback`;
+// OAuth callback endpoint
+app.get('/auth/callback', async (req, res) => {
+    const { code, state } = req.query;
+    
+    if (!code || !state) {
+        return res.status(400).send('Missing authorization code or state');
+    }
 
-// --- COMMAND QUEUE FOR AHK ---
-let commandQueue = [];
+    try {
+        // Get access token
+        const tokenResponse = await axios.post(EPIC_CONFIG.tokenUrl, 
+            new URLSearchParams({
+                grant_type: 'authorization_code',
+                code: code,
+                redirect_uri: EPIC_CONFIG.redirectUri
+            }), {
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Authorization': `Basic ${Buffer.from(`${EPIC_CONFIG.clientId}:${EPIC_CONFIG.clientSecret}`).toString('base64')}`
+                }
+            });
 
-// --- DISCORD BOT ---
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.MessageContent] });
+        const accessToken = tokenResponse.data.access_token;
 
+        // Get user info
+        const userResponse = await axios.get(EPIC_CONFIG.userInfoUrl, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`
+            }
+        });
+
+        const userInfo = userResponse.data;
+        
+        // Get Fortnite account info
+        const fortniteResponse = await axios.get(
+            `${EPIC_CONFIG.fortniteServiceUrl}/game/v2/profile/${userInfo.accountId}/client/QueryProfile?profileId=athena`,
+            {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            }
+        );
+
+        const fortniteData = fortniteResponse.data;
+
+        // Get pending auth data
+        const authData = pendingAuths.get(state);
+        if (!authData) {
+            return res.status(400).send('Invalid state parameter');
+        }
+
+        const { userId, channelId } = authData;
+
+        // Store user connection
+        userConnections.set(userId, {
+            epicUsername: userInfo.displayName,
+            fortniteAccountId: userInfo.accountId,
+            lastUpdated: new Date()
+        });
+
+        // Send to Discord channel
+        const channel = await client.channels.fetch(channelId);
+        if (channel) {
+            const embed = new EmbedBuilder()
+                .setTitle('🎮 Fortnite Username Connected')
+                .setColor(0x00FF00)
+                .addFields(
+                    { name: 'Discord User', value: `<@${userId}>`, inline: true },
+                    { name: 'Epic Games Username', value: userInfo.displayName, inline: true },
+                    { name: 'Account ID', value: userInfo.accountId, inline: false }
+                )
+                .setTimestamp()
+                .setFooter({ text: 'Fortnite Verification Bot' });
+
+            await channel.send({ embeds: [embed] });
+        }
+
+        // Clean up
+        pendingAuths.delete(state);
+
+        res.send(`
+            <html>
+                <body>
+                    <h2>Successfully connected Fortnite account!</h2>
+                    <p>You can now return to Discord.</p>
+                    <script>
+                        setTimeout(() => window.close(), 3000);
+                    </script>
+                </body>
+            </html>
+        `);
+
+    } catch (error) {
+        console.error('OAuth callback error:', error.response?.data || error.message);
+        res.status(500).send('Authentication failed');
+    }
+});
+
+// Bot commands
 client.once('ready', () => {
-  console.log(`Logged in as ${client.user.tag}`);
-  console.log(`OAuth Redirect URI: ${redirectUri}`);
+    console.log(`✅ Logged in as ${client.user.tag}`);
+    console.log(`🌐 OAuth server running on port ${PORT}`);
 });
 
 client.on('messageCreate', async (message) => {
-  if (message.author.bot) return;
+    if (message.author.bot) return;
 
-  const args = message.content.trim().split(/ +/);
-  const command = args.shift().toLowerCase();
+    // Set Fortnite channel command
+    if (message.content.startsWith('!setfortnitechannel')) {
+        if (!message.member.permissions.has('ADMINISTRATOR')) {
+            return message.reply('❌ You need administrator permissions to use this command.');
+        }
 
-  if (command === '!addfriend') {
-    if (!epicClientId || !epicClientSecret) {
-      return message.reply('Epic OAuth not configured.');
+        process.env.FORTNITE_CHANNEL_ID = message.channel.id;
+        await message.reply('✅ This channel has been set as the Fortnite username channel!');
     }
 
-    const oauthUrl = `https://www.epicgames.com/id/authorize?client_id=${epicClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=basic_profile&state=${message.author.id}`;
+    // Connect Fortnite account command
+    if (message.content.startsWith('!connectfortnite')) {
+        const state = Math.random().toString(36).substring(7);
+        
+        // Store pending authentication
+        pendingAuths.set(state, {
+            userId: message.author.id,
+            channelId: process.env.FORTNITE_CHANNEL_ID || message.channel.id
+        });
 
-    const embed = new EmbedBuilder()
-      .setTitle('Add Fortnite Friend')
-      .setDescription('Click below to log in with Epic Games and add your Fortnite account as a friend.')
-      .setColor('#7289da');
+        const authUrl = `${EPIC_CONFIG.authUrl}?client_id=${EPIC_CONFIG.clientId}&response_type=code&redirect_uri=${encodeURIComponent(EPIC_CONFIG.redirectUri)}&state=${state}&scope=basic_profile+friends_list+openid+fortnite`;
 
-    const row = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setLabel('Log in with Epic Games')
-        .setStyle(ButtonStyle.Link)
-        .setURL(oauthUrl)
-    );
+        const row = new ActionRowBuilder()
+            .addComponents(
+                new ButtonBuilder()
+                    .setLabel('Connect Epic Games Account')
+                    .setStyle(ButtonStyle.Link)
+                    .setURL(authUrl)
+            );
 
-    await message.reply({ embeds: [embed], components: [row] });
-  }
-});
+        const embed = new EmbedBuilder()
+            .setTitle('🔗 Connect Fortnite Account')
+            .setDescription('Click the button below to connect your Epic Games/Fortnite account. This will share your Fortnite username with the server.')
+            .setColor(0x0099FF);
 
-client.login(discordToken);
-
-// --- OAUTH CALLBACK ---
-app.get('/callback', async (req, res) => {
-  const { code, state: discordId, error, error_description } = req.query;
-
-  if (error) {
-    console.error('OAuth error:', error, error_description);
-    return res.send(`<h2>OAuth Error</h2><p>${error}: ${error_description || 'Unknown error'}</p>`);
-  }
-
-  if (!code || !discordId) return res.send('Missing code or Discord ID');
-
-  try {
-    // --- EXCHANGE CODE FOR ACCESS TOKEN ---
-    const tokenResponse = await axios.post(
-      'https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token',
-      new URLSearchParams({
-        grant_type: 'authorization_code',
-        code,
-        client_id: epicClientId,
-        client_secret: epicClientSecret,
-        redirect_uri: redirectUri
-      }),
-      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
-    );
-
-    const accessToken = tokenResponse.data.access_token;
-
-    if (!accessToken) return res.send('Failed to get access token.');
-
-    // --- FETCH EPIC ACCOUNT INFO ---
-    const userResponse = await axios.get(
-      'https://account-public-service-prod03.ol.epicgames.com/account/api/public/account',
-      { headers: { Authorization: `Bearer ${accessToken}` } }
-    );
-
-    const { displayName, id: epicId } = userResponse.data;
-
-    if (!displayName) return res.send('Failed to get Epic username.');
-
-    // --- SEND TO DISCORD CHANNEL ---
-    const channel = await client.channels.fetch(channelId).catch(() => null);
-    if (channel) {
-      await channel.send(`New Fortnite friend request: **Username**: ${displayName}, **Epic ID**: ${epicId} (Discord ID: ${discordId})`);
+        await message.reply({
+            embeds: [embed],
+            components: [row],
+            ephemeral: true
+        });
     }
 
-    // --- QUEUE COMMAND FOR AHK ---
-    const cmd = `add-friend ${displayName}`;
-    const botname = 'sigmafish69';
-    const id = uuidv4();
-    commandQueue.push({ id, botname, command: cmd });
-    console.log('Queued command:', { id, botname, command: cmd });
+    // Check connected users command
+    if (message.content.startsWith('!fortniteusers')) {
+        if (userConnections.size === 0) {
+            return message.reply('No Fortnite accounts connected yet.');
+        }
 
-    // --- NOTIFY DISCORD USER ---
-    const user = await client.users.fetch(discordId).catch(() => null);
-    if (user) await user.send(`Your Fortnite username (${displayName}) has been queued for a friend request on bot ${botname}.`);
+        const embed = new EmbedBuilder()
+            .setTitle('🎮 Connected Fortnite Accounts')
+            .setColor(0x0099FF);
 
-    res.send(`
-      <h2>Success!</h2>
-      <p>Your Fortnite username (${displayName}) has been submitted.</p>
-      <p>You will receive a confirmation in Discord.</p>
-    `);
-  } catch (err) {
-    console.error('OAuth Callback Error:', err.response?.data || err.message);
-    res.send(`<h2>Authentication Failed</h2><p>${err.response?.data?.error_description || err.message}</p>`);
-  }
+        let description = '';
+        userConnections.forEach((data, userId) => {
+            description += `• <@${userId}> - **${data.epicUsername}**\n`;
+        });
+
+        embed.setDescription(description);
+        await message.reply({ embeds: [embed] });
+    }
 });
 
-// --- AHK ENDPOINTS ---
-app.get('/fetch-command', (req, res) => {
-  if (commandQueue.length === 0) return res.json({});
-  res.json(commandQueue[0]);
+// Start servers
+app.listen(PORT, () => {
+    console.log(`OAuth callback server started on port ${PORT}`);
 });
 
-app.post('/ack-command', (req, res) => {
-  const { id } = req.body;
-  if (!id) return res.status(400).send('Missing id');
-  commandQueue = commandQueue.filter(cmd => cmd.id !== id);
-  res.send('Acknowledged');
-});
-
-// --- START SERVER ---
-app.listen(port, () => {
-  console.log(`Server listening on port ${port}`);
-  console.log(`Redirect URI: ${redirectUri}`);
-});
+client.login(process.env.DISCORD_TOKEN);
