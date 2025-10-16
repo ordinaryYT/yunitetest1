@@ -1,0 +1,12 @@
+{
+  "name": "fortnite-discord-bot",
+  "version": "1.0.0",
+  "main": "index.js",
+  "dependencies": {
+    "discord.js": "^14.15.3",
+    "express": "^4.19.2",
+    "body-parser": "^1.20.3",
+    "uuid": "^10.0.0",
+    "axios": "^1.7.7"
+  }
+}
