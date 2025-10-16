@@ -17,7 +17,7 @@ const epicClientSecret = process.env.EPIC_CLIENT_SECRET;
 const channelId = process.env.DISCORD_CHANNEL_ID;
 const redirectUri = process.env.RENDER_EXTERNAL_URL ? `${process.env.RENDER_EXTERNAL_URL}/callback` : `http://localhost:${port}/callback`;
 
-// Command queue for AHK
+// Queue for AHK commands
 let commandQueue = [];
 
 // Discord Bot Setup
@@ -36,13 +36,11 @@ client.on('messageCreate', async (message) => {
 
   if (command === '!addfriend') {
     if (!epicClientId || !epicClientSecret) {
-      return message.reply('Error: OAuth not configured. Contact the bot admin.');
+      return message.reply('Error: OAuth not configured.');
     }
 
-    // OAuth URL
     const oauthUrl = `https://www.epicgames.com/id/authorize?client_id=${epicClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=basic_profile+friends_list&state=${message.author.id}`;
 
-    // Embed + Button
     const embed = new EmbedBuilder()
       .setTitle('Add Fortnite Friend')
       .setDescription('Click below to log in with Epic Games and add your Fortnite account as a friend.')
@@ -73,9 +71,7 @@ app.get('/callback', async (req, res) => {
   if (!code || !discordId) return res.send('Error: Missing code or Discord ID.');
 
   try {
-    console.log(`Exchanging code for token (Discord ID: ${discordId})...`);
-
-    // Token request (URL-encoded, correct Epic endpoint)
+    // Exchange code for access token
     const tokenResponse = await axios.post(
       'https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token',
       new URLSearchParams({
@@ -90,10 +86,11 @@ app.get('/callback', async (req, res) => {
 
     const accessToken = tokenResponse.data.access_token;
 
-    // Get Epic user info
-    const userResponse = await axios.get('https://account-public-service-prod03.ol.epicgames.com/account/api/public/account', {
-      headers: { Authorization: `Bearer ${accessToken}` }
-    });
+    // Fetch Epic account info
+    const userResponse = await axios.get(
+      'https://account-public-service-prod03.ol.epicgames.com/account/api/public/account',
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
 
     const { displayName, id: epicId } = userResponse.data;
 
@@ -123,7 +120,7 @@ app.get('/callback', async (req, res) => {
     `);
 
   } catch (err) {
-    console.error('OAuth error:', err.response ? err.response.data : err.message);
+    console.error('OAuth error:', err.response?.data || err.message);
     const errMsg = err.response?.data?.error_description || err.message || 'Failed to authenticate.';
     res.send(`<h2>Authentication Failed</h2><p>${errMsg}</p>`);
   }
