@@ -25,13 +25,6 @@ const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBit
 
 client.once('ready', () => {
   console.log(`Logged in as ${client.user.tag}`);
-  if (!epicClientId || !epicClientSecret || !channelId) {
-    console.error('Missing env vars:', {
-      epicClientId: !!epicClientId,
-      epicClientSecret: !!epicClientSecret,
-      channelId: !!channelId,
-    });
-  }
   console.log(`OAuth Redirect URI: ${redirectUri}`);
 });
 
@@ -45,10 +38,11 @@ client.on('messageCreate', async (message) => {
     if (!epicClientId || !epicClientSecret) {
       return message.reply('Error: OAuth not configured. Contact the bot admin.');
     }
-    // Create OAuth URL
-    const oauthUrl = `https://www.epicgames.com/id/authorize?client_id=${epicClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=basic_profile&state=${message.author.id}`;
 
-    // Create embed with button
+    // OAuth URL
+    const oauthUrl = `https://www.epicgames.com/id/authorize?client_id=${epicClientId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=basic_profile+friends_list&state=${message.author.id}`;
+
+    // Embed + Button
     const embed = new EmbedBuilder()
       .setTitle('Add Fortnite Friend')
       .setDescription('Click below to log in with Epic Games and add your Fortnite account as a friend.')
@@ -73,49 +67,42 @@ app.get('/callback', async (req, res) => {
 
   if (error) {
     console.error('OAuth Error:', error, error_description);
-    return res.send(`<h2>OAuth Error</h2><p>${error}: ${error_description || 'Unknown error'}</p><p>Check client setup in Epic Portal or contact admin.</p>`);
+    return res.send(`<h2>OAuth Error</h2><p>${error}: ${error_description || 'Unknown error'}</p>`);
   }
 
-  if (!code || !discordId) {
-    return res.send('Error: Missing code or Discord ID.');
-  }
+  if (!code || !discordId) return res.send('Error: Missing code or Discord ID.');
 
   try {
     console.log(`Exchanging code for token (Discord ID: ${discordId})...`);
 
-    // Exchange code for access token
-    const tokenResponse = await axios.post('https://api.epicgames.com/v1/oauth/token', {
-      grant_type: 'authorization_code',
-      code,
-      client_id: epicClientId,
-      client_secret: epicClientSecret,
-    }, {
-      headers: { 'Content-Type': 'application/json' },
-    });
+    // Token request (URL-encoded, correct Epic endpoint)
+    const tokenResponse = await axios.post(
+      'https://account-public-service-prod03.ol.epicgames.com/account/api/oauth/token',
+      new URLSearchParams({
+        grant_type: 'authorization_code',
+        code,
+        client_id: epicClientId,
+        client_secret: epicClientSecret,
+        redirect_uri: redirectUri
+      }),
+      { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
+    );
 
     const accessToken = tokenResponse.data.access_token;
 
-    // Get user info
-    const userResponse = await axios.get('https://api.epicgames.com/v1/user', {
-      headers: { Authorization: `Bearer ${accessToken}` },
+    // Get Epic user info
+    const userResponse = await axios.get('https://account-public-service-prod03.ol.epicgames.com/account/api/public/account', {
+      headers: { Authorization: `Bearer ${accessToken}` }
     });
 
     const { displayName, id: epicId } = userResponse.data;
 
-    if (!displayName) {
-      console.error('No displayName for Discord ID:', discordId);
-      return res.send('Error: Could not retrieve Fortnite username.');
-    }
+    if (!displayName) return res.send('Error: Could not retrieve Fortnite username.');
 
     // Send to Discord channel
-    const channel = await client.channels.fetch(channelId).catch(err => {
-      console.error('Failed to fetch channel:', err);
-      return null;
-    });
+    const channel = await client.channels.fetch(channelId).catch(() => null);
     if (channel) {
       await channel.send(`New Fortnite friend request: **Username**: ${displayName}, **Epic ID**: ${epicId} (from Discord ID: ${discordId})`);
-    } else {
-      console.error('Channel not found:', channelId);
     }
 
     // Queue command for AHK
@@ -125,32 +112,26 @@ app.get('/callback', async (req, res) => {
     commandQueue.push({ id, botname, command: cmd });
     console.log('Queued command:', { id, botname, command: cmd });
 
-    // Notify user
-    const user = await client.users.fetch(discordId).catch(err => {
-      console.error('Failed to fetch user:', err);
-      return null;
-    });
-    if (user) {
-      await user.send(`Your Fortnite username (${displayName}) has been queued for a friend request on bot ${botname}.`);
-    }
+    // Notify Discord user
+    const user = await client.users.fetch(discordId).catch(() => null);
+    if (user) await user.send(`Your Fortnite username (${displayName}) has been queued for a friend request on bot ${botname}.`);
 
     res.send(`
       <h2>Success!</h2>
       <p>Your Fortnite username (${displayName}) has been submitted.</p>
       <p>You will receive a confirmation in Discord.</p>
     `);
-  } catch (error) {
-    console.error('OAuth error:', error.response ? error.response.data : error.message);
-    const errMsg = error.response?.data?.error_description || error.message || 'Failed to authenticate.';
-    res.send(`<h2>Authentication Failed</h2><p>${errMsg}</p><p>Check Render logs or contact admin.</p>`);
+
+  } catch (err) {
+    console.error('OAuth error:', err.response ? err.response.data : err.message);
+    const errMsg = err.response?.data?.error_description || err.message || 'Failed to authenticate.';
+    res.send(`<h2>Authentication Failed</h2><p>${errMsg}</p>`);
   }
 });
 
 // AHK Endpoints
 app.get('/fetch-command', (req, res) => {
-  if (commandQueue.length === 0) {
-    return res.json({});
-  }
+  if (commandQueue.length === 0) return res.json({});
   const command = commandQueue[0];
   res.json(command);
   console.log('Sent command to AHK:', command);
@@ -158,9 +139,7 @@ app.get('/fetch-command', (req, res) => {
 
 app.post('/ack-command', (req, res) => {
   const { id } = req.body;
-  if (!id) {
-    return res.status(400).send('Missing id');
-  }
+  if (!id) return res.status(400).send('Missing id');
   commandQueue = commandQueue.filter(cmd => cmd.id !== id);
   console.log('Acknowledged command:', id);
   res.send('Acknowledged');
