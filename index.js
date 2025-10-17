@@ -31,7 +31,7 @@ const userConnections = new Map();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// OAuth callback endpoint - FIXED ROUTE
+// OAuth callback endpoint
 app.get('/callback', async (req, res) => {
     const { code, state } = req.query;
     
@@ -40,20 +40,30 @@ app.get('/callback', async (req, res) => {
     }
 
     try {
-        // Get access token
-        const tokenResponse = await axios.post(EPIC_CONFIG.tokenUrl, 
-            new URLSearchParams({
-                grant_type: 'authorization_code',
-                code: code,
-                redirect_uri: EPIC_CONFIG.redirectUri
-            }), {
-                headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'Authorization': `Basic ${Buffer.from(`${EPIC_CONFIG.clientId}:${EPIC_CONFIG.clientSecret}`).toString('base64')}`
-                }
-            });
+        console.log('Received OAuth callback with code:', code);
+        console.log('State:', state);
+
+        // Get access token - FIXED VERSION
+        const tokenParams = new URLSearchParams({
+            grant_type: 'authorization_code',
+            code: code,
+            redirect_uri: EPIC_CONFIG.redirectUri
+        });
+
+        const authHeader = Buffer.from(`${EPIC_CONFIG.clientId}:${EPIC_CONFIG.clientSecret}`).toString('base64');
+        
+        console.log('Making token request to:', EPIC_CONFIG.tokenUrl);
+        console.log('Client ID:', EPIC_CONFIG.clientId);
+
+        const tokenResponse = await axios.post(EPIC_CONFIG.tokenUrl, tokenParams, {
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Authorization': `Basic ${authHeader}`
+            }
+        });
 
         const accessToken = tokenResponse.data.access_token;
+        console.log('Successfully got access token');
 
         // Get user info
         const userResponse = await axios.get(EPIC_CONFIG.userInfoUrl, {
@@ -63,10 +73,12 @@ app.get('/callback', async (req, res) => {
         });
 
         const userInfo = userResponse.data;
+        console.log('User info received:', userInfo.displayName);
         
         // Get pending auth data
         const authData = pendingAuths.get(state);
         if (!authData) {
+            console.log('Invalid state:', state);
             return res.status(400).send('Invalid state parameter');
         }
 
@@ -101,8 +113,16 @@ app.get('/callback', async (req, res) => {
 
         res.send(`
             <html>
+                <head>
+                    <title>Success</title>
+                    <style>
+                        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+                        .success { color: green; font-size: 24px; }
+                    </style>
+                </head>
                 <body>
-                    <h2>Successfully connected Fortnite account!</h2>
+                    <div class="success">✅ Successfully connected Fortnite account!</div>
+                    <p>Username: <strong>${userInfo.displayName}</strong></p>
                     <p>You can now return to Discord.</p>
                     <script>
                         setTimeout(() => window.close(), 3000);
@@ -112,20 +132,39 @@ app.get('/callback', async (req, res) => {
         `);
 
     } catch (error) {
-        console.error('OAuth callback error:', error.response?.data || error.message);
-        res.status(500).send('Authentication failed');
+        console.error('OAuth callback error:', error.message);
+        console.error('Error details:', {
+            status: error.response?.status,
+            statusText: error.response?.statusText,
+            data: error.response?.data
+        });
+        
+        res.status(500).send(`
+            <html>
+                <body>
+                    <h2 style="color: red;">❌ Authentication Failed</h2>
+                    <p>Error: ${error.response?.data?.error || error.message}</p>
+                    <p>Please try again.</p>
+                </body>
+            </html>
+        `);
     }
 });
 
 // Health check endpoint
 app.get('/', (req, res) => {
-    res.send('Bot is running!');
+    res.json({ 
+        status: 'OK', 
+        bot: client.isReady() ? 'Connected' : 'Disconnected',
+        timestamp: new Date().toISOString()
+    });
 });
 
 // Bot commands
 client.once('ready', () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
     console.log(`🌐 OAuth server running on port ${PORT}`);
+    console.log(`🔗 Callback URL: ${EPIC_CONFIG.redirectUri}`);
 });
 
 client.on('messageCreate', async (message) => {
@@ -151,7 +190,7 @@ client.on('messageCreate', async (message) => {
             channelId: process.env.FORTNITE_CHANNEL_ID || message.channel.id
         });
 
-        // Fixed URL structure
+        // Fixed URL structure to match Yunite
         const authUrl = `${EPIC_CONFIG.authUrl}?client_id=${EPIC_CONFIG.clientId}&redirect_uri=${encodeURIComponent(EPIC_CONFIG.redirectUri)}&response_type=code&scope=basic_profile&state=${state}`;
 
         const row = new ActionRowBuilder()
