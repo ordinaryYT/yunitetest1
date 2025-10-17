@@ -22,31 +22,104 @@ const userConnections = new Map();
 
 app.use(express.json());
 
-// FortniteAPI.io verification
-const verifyFortniteUsername = async (username) => {
+// Test API key function
+const testAPIKey = async () => {
+    console.log('🧪 Testing FortniteAPI.io key...');
+    console.log(`🔑 API Key: ${process.env.FORTNITE_API_IO_KEY ? 'Present' : 'MISSING'}`);
+    
+    if (!process.env.FORTNITE_API_IO_KEY) {
+        console.log('❌ FORTNITE_API_IO_KEY is not set in environment variables');
+        return false;
+    }
+
     try {
-        const response = await axios.get(`https://fortniteapi.io/v1/lookup?username=${encodeURIComponent(username)}`, {
+        const response = await axios.get('https://fortniteapi.io/v1/status', {
             headers: {
                 'Authorization': process.env.FORTNITE_API_IO_KEY
-            }
+            },
+            timeout: 5000
+        });
+        console.log('✅ API Key is WORKING! Status:', response.data);
+        return true;
+    } catch (error) {
+        console.log('❌ API Key TEST FAILED:');
+        console.log('   Status:', error.response?.status);
+        console.log('   Error:', error.response?.data || error.message);
+        return false;
+    }
+};
+
+// FortniteAPI.io verification with detailed logging
+const verifyFortniteUsername = async (username) => {
+    console.log(`\n🔍 Starting verification for: "${username}"`);
+    
+    // Test API key first
+    const apiWorking = await testAPIKey();
+    if (!apiWorking) {
+        console.log('⚠️ Using MANUAL verification (API not working)');
+        return { 
+            verified: true, 
+            username: username, 
+            manual: true,
+            note: 'API not available - manual verification'
+        };
+    }
+
+    try {
+        const apiUrl = `https://fortniteapi.io/v1/lookup?username=${encodeURIComponent(username)}`;
+        console.log(`🌐 Making request to: ${apiUrl}`);
+        
+        const response = await axios.get(apiUrl, {
+            headers: {
+                'Authorization': process.env.FORTNITE_API_IO_KEY
+            },
+            timeout: 10000
         });
         
-        if (response.data.result) {
+        console.log(`📥 Response Status: ${response.status}`);
+        console.log(`📊 Response Data:`, JSON.stringify(response.data, null, 2));
+        
+        if (response.data && response.data.result) {
+            console.log(`✅ SUCCESS: Username "${username}" verified as "${response.data.account.name}"`);
             return {
                 verified: true,
                 username: response.data.account.name,
-                accountId: response.data.account.id
+                accountId: response.data.account.id,
+                source: 'fortniteapi.io'
+            };
+        } else {
+            console.log(`❌ Username "${username}" not found in API`);
+            return { 
+                verified: false,
+                error: 'Username not found in FortniteAPI.io'
             };
         }
     } catch (error) {
-        console.error('FortniteAPI.io error:', error.response?.data || error.message);
+        console.log('🚨 API Request Failed:');
+        console.log('   Status:', error.response?.status);
+        console.log('   Error Data:', error.response?.data);
+        console.log('   Message:', error.message);
+        
+        // Fallback to manual verification on API failure
+        console.log('⚠️ Falling back to MANUAL verification due to API error');
+        return { 
+            verified: true, 
+            username: username, 
+            manual: true,
+            note: 'API error - manual verification'
+        };
     }
-    return { verified: false };
 };
 
 // Bot events
-client.once('ready', () => {
-    console.log(`✅ Logged in as ${client.user.tag}`);
+client.once('ready', async () => {
+    console.log(`\n✅ Logged in as ${client.user.tag}`);
+    console.log(`🔗 Bot is in ${client.guilds.cache.size} servers`);
+    
+    // Test API key on startup
+    console.log('\n--- STARTUP API TEST ---');
+    await testAPIKey();
+    console.log('--- STARTUP COMPLETE ---\n');
 });
 
 // Send verification message and wait for reactions
@@ -79,6 +152,8 @@ client.on('messageCreate', async (message) => {
             channelId: message.channel.id,
             guildId: message.guild.id
         });
+
+        console.log(`📝 Verification message sent in channel: ${message.channel.name}`);
     }
 
     // Override command
@@ -89,14 +164,17 @@ client.on('messageCreate', async (message) => {
         }
 
         const fortniteUsername = args.slice(1).join(' ');
+        console.log(`\n🎯 Override command from ${message.author.tag}: ${fortniteUsername}`);
+
         const result = await verifyFortniteUsername(fortniteUsername);
 
         // Get the Fortnite channel
         const fortniteChannel = await client.channels.fetch(process.env.FORTNITE_CHANNEL_ID);
+        console.log(`📨 Fortnite channel: ${fortniteChannel?.name || 'NOT FOUND'}`);
 
         if (result.verified) {
             // Send to user
-            await message.author.send(`🎮 FORTNITE ACCOUNT VERIFIED\n🎯 Epic Games: ${result.username}`);
+            await message.author.send(`🎮 FORTNITE ACCOUNT VERIFIED\n🎯 Epic Games: ${result.username}${result.manual ? '\n⚠️ Manual verification (API unavailable)' : ''}`);
 
             // Send to Fortnite channel
             const embed = new EmbedBuilder()
@@ -105,8 +183,9 @@ client.on('messageCreate', async (message) => {
                 .addFields(
                     { name: '👤 Discord User', value: `<@${message.author.id}>`, inline: true },
                     { name: '🎯 Epic Games', value: result.username, inline: true },
-                    { name: '🆔 Account ID', value: result.accountId, inline: false },
-                    { name: '⚠️ Method', value: 'Used !overide command', inline: true }
+                    { name: '🆔 Account ID', value: result.accountId || 'Manual Verification', inline: false },
+                    { name: '⚠️ Method', value: 'Used !overide command', inline: true },
+                    { name: '🔍 Source', value: result.manual ? 'Manual (API Down)' : 'FortniteAPI.io', inline: true }
                 )
                 .setTimestamp();
 
@@ -117,8 +196,11 @@ client.on('messageCreate', async (message) => {
                 epicUsername: result.username,
                 accountId: result.accountId,
                 method: 'override',
+                source: result.source || 'manual',
                 verifiedAt: new Date()
             });
+
+            console.log(`✅ Override SUCCESS for ${message.author.tag}: ${result.username}`);
 
         } else {
             // Send error to user
@@ -132,12 +214,20 @@ client.on('messageCreate', async (message) => {
                     { name: '👤 Discord User', value: `<@${message.author.id}>`, inline: true },
                     { name: '❌ Attempted Username', value: fortniteUsername, inline: true },
                     { name: '⚠️ Method', value: 'Used !overide command', inline: true },
-                    { name: '📝 Status', value: 'Username not found', inline: false }
+                    { name: '📝 Status', value: result.error || 'Username not found', inline: false }
                 )
                 .setTimestamp();
 
             await fortniteChannel.send({ embeds: [errorEmbed] });
+
+            console.log(`❌ Override FAILED for ${message.author.tag}: ${fortniteUsername}`);
         }
+    }
+
+    // Debug command to check API status
+    if (message.content.startsWith('!apistatus') && message.member.permissions.has('ADMINISTRATOR')) {
+        const apiStatus = await testAPIKey();
+        await message.reply(`API Status: ${apiStatus ? '✅ WORKING' : '❌ FAILED'}`);
     }
 });
 
@@ -159,6 +249,8 @@ client.on('messageReactionAdd', async (reaction, user) => {
     const verificationData = pendingVerifications.get(messageId);
 
     if (verificationData && reaction.emoji.name === '✋') {
+        console.log(`✋ Reaction from ${user.tag} on verification message`);
+        
         try {
             // Send DM to user
             const dm = await user.send(`**Please type your Fortnite username.**\n\nPlease only write your Fortnite username in this DM otherwise you will not be added to the custom game.\n\nAlternatively if this doesn't work type \`!overide yourfortniteusername\`\n\nPlease note if this name is wrong you will not be added to the custom game.`);
@@ -170,8 +262,10 @@ client.on('messageReactionAdd', async (reaction, user) => {
                 startedAt: new Date()
             });
 
+            console.log(`📩 DM sent to ${user.tag}`);
+
         } catch (error) {
-            console.error('Could not send DM to user:', error);
+            console.error('❌ Could not send DM to user:', error.message);
             // Can't send DM, notify in original channel
             const originalChannel = await client.channels.fetch(verificationData.channelId);
             await originalChannel.send(`<@${user.id}> I couldn't send you a DM! Please make sure your DMs are open and try again.`);
@@ -187,6 +281,7 @@ client.on('messageCreate', async (message) => {
     const userData = pendingVerifications.get(message.author.id);
     if (userData) {
         const fortniteUsername = message.content.trim();
+        console.log(`📨 DM from ${message.author.tag}: "${fortniteUsername}"`);
         
         // Verify the username
         const result = await verifyFortniteUsername(fortniteUsername);
@@ -196,7 +291,7 @@ client.on('messageCreate', async (message) => {
 
         if (result.verified) {
             // Send success to user
-            await message.author.send(`🎮 FORTNITE ACCOUNT VERIFIED\n🎯 Epic Games: ${result.username}`);
+            await message.author.send(`🎮 FORTNITE ACCOUNT VERIFIED\n🎯 Epic Games: ${result.username}${result.manual ? '\n⚠️ Manual verification (API unavailable)' : ''}`);
 
             // Send to Fortnite channel
             const embed = new EmbedBuilder()
@@ -205,8 +300,9 @@ client.on('messageCreate', async (message) => {
                 .addFields(
                     { name: '👤 Discord User', value: `<@${message.author.id}>`, inline: true },
                     { name: '🎯 Epic Games', value: result.username, inline: true },
-                    { name: '🆔 Account ID', value: result.accountId, inline: false },
-                    { name: '📝 Method', value: 'DM Verification', inline: true }
+                    { name: '🆔 Account ID', value: result.accountId || 'Manual Verification', inline: false },
+                    { name: '📝 Method', value: 'DM Verification', inline: true },
+                    { name: '🔍 Source', value: result.manual ? 'Manual (API Down)' : 'FortniteAPI.io', inline: true }
                 )
                 .setTimestamp();
 
@@ -217,8 +313,11 @@ client.on('messageCreate', async (message) => {
                 epicUsername: result.username,
                 accountId: result.accountId,
                 method: 'dm',
+                source: result.source || 'manual',
                 verifiedAt: new Date()
             });
+
+            console.log(`✅ DM Verification SUCCESS for ${message.author.tag}: ${result.username}`);
 
         } else {
             // Send error to user
@@ -231,11 +330,13 @@ client.on('messageCreate', async (message) => {
                 .addFields(
                     { name: '👤 Discord User', value: `<@${message.author.id}>`, inline: true },
                     { name: '❌ Attempted Username', value: fortniteUsername, inline: true },
-                    { name: '📝 Status', value: 'Username not found', inline: false }
+                    { name: '📝 Status', value: result.error || 'Username not found', inline: false }
                 )
                 .setTimestamp();
 
             await fortniteChannel.send({ embeds: [errorEmbed] });
+
+            console.log(`❌ DM Verification FAILED for ${message.author.tag}: ${fortniteUsername}`);
         }
 
         // Clean up
@@ -245,7 +346,7 @@ client.on('messageCreate', async (message) => {
 
 // Start server
 app.listen(PORT, () => {
-    console.log(`Server started on port ${PORT}`);
+    console.log(`🚀 Server started on port ${PORT}`);
 });
 
 client.login(process.env.DISCORD_TOKEN);
