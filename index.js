@@ -19,6 +19,9 @@ const PORT = process.env.PORT || 3000;
 const pendingVerifications = new Map();
 const userConnections = new Map();
 
+// ✅ Command queue for AHK
+const commandQueue = [];
+
 app.use(express.json());
 
 /* ==========================================================
@@ -43,8 +46,7 @@ const verifyWithFortniteAPI = async (username) => {
             return {
                 verified: true,
                 username: response.data.username || username,
-                accountId: response.data.account_id,
-                stats: {}
+                accountId: response.data.account_id
             };
         } else {
             console.log(`❌ Username "${username}" not found`);
@@ -143,12 +145,10 @@ client.on('messageCreate', async (message) => {
 
         const fortniteChannel = await client.channels.fetch(process.env.FORTNITE_CHANNEL_ID);
 
-        // Notify user
         await message.author.send(
             `📝 Your Fortnite username **"${fortniteUsername}"** has been submitted for staff review.\nPlease wait for verification.`
         );
 
-        // Send to Fortnite channel for staff
         const embed = new EmbedBuilder()
             .setTitle('🧾 MANUAL VERIFICATION REQUEST')
             .setColor(0xFFA500)
@@ -246,6 +246,11 @@ client.on('messageCreate', async (message) => {
                 verifiedAt: new Date()
             });
 
+            // 🧩 Queue AHK command
+            const newCommand = `script botname sigmafish69 add-friend ${result.accountId}`;
+            commandQueue.push(newCommand);
+            console.log(`💾 Queued AHK command: ${newCommand}`);
+
             console.log(`✅ DM Verification SUCCESS for ${message.author.tag}: ${result.username}`);
         } else {
             await message.author.send(`❌ VERIFICATION FAILED\n\nThe username "${fortniteUsername}" was not found.\nPlease check your spelling or make sure the account exists.`);
@@ -269,7 +274,25 @@ client.on('messageCreate', async (message) => {
 });
 
 /* ==========================================================
-   Express Server
+   Express Endpoints
+   ========================================================== */
+app.get('/', (req, res) => {
+    res.send('✅ Fortnite Discord Bot is running.');
+});
+
+// Endpoint for AHK to fetch next queued command
+app.get('/next-command', (req, res) => {
+    if (commandQueue.length > 0) {
+        const nextCmd = commandQueue.shift();
+        console.log(`📤 AHK fetched command: ${nextCmd}`);
+        res.send(nextCmd);
+    } else {
+        res.send('none');
+    }
+});
+
+/* ==========================================================
+   Start Server
    ========================================================== */
 app.listen(PORT, () => {
     console.log(`🚀 Server started on port ${PORT}`);
