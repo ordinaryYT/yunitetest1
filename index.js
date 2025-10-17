@@ -31,8 +31,8 @@ const userConnections = new Map();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// OAuth callback endpoint
-app.get('/auth/callback', async (req, res) => {
+// OAuth callback endpoint - FIXED ROUTE
+app.get('/callback', async (req, res) => {
     const { code, state } = req.query;
     
     if (!code || !state) {
@@ -117,6 +117,11 @@ app.get('/auth/callback', async (req, res) => {
     }
 });
 
+// Health check endpoint
+app.get('/', (req, res) => {
+    res.send('Bot is running!');
+});
+
 // Bot commands
 client.once('ready', () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
@@ -146,7 +151,7 @@ client.on('messageCreate', async (message) => {
             channelId: process.env.FORTNITE_CHANNEL_ID || message.channel.id
         });
 
-        // Fixed URL structure to match Yunite
+        // Fixed URL structure
         const authUrl = `${EPIC_CONFIG.authUrl}?client_id=${EPIC_CONFIG.clientId}&redirect_uri=${encodeURIComponent(EPIC_CONFIG.redirectUri)}&response_type=code&scope=basic_profile&state=${state}`;
 
         const row = new ActionRowBuilder()
