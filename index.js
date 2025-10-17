@@ -22,119 +22,81 @@ const userConnections = new Map();
 
 app.use(express.json());
 
-// Check Epic Games website directly - NO FORTNITE APIS
-const verifyEpicUsername = async (username) => {
-    console.log(`\n🔍 Checking Epic Games website for: "${username}"`);
+// Tracker Network verification
+const verifyWithTrackerNetwork = async (username) => {
+    console.log(`\n🔍 Checking Tracker Network for: "${username}"`);
     
     try {
-        // Method 1: Epic Games account lookup endpoint
-        const response = await axios.get(`https://graphql.epicgames.com/graphql`, {
-            method: 'POST',
+        const response = await axios.get(`https://api.tracker.gg/api/v2/fortnite/standard/profile/epic/${encodeURIComponent(username)}`, {
             headers: {
-                'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                'TRN-Api-Key': process.env.TRACKER_NETWORK_KEY || ''
             },
-            data: {
-                query: `
-                    query SearchPlayers($displayName: String!) {
-                        SearchPlayers(displayName: $displayName) {
-                            accountId
-                            displayName
-                        }
-                    }
-                `,
-                variables: {
-                    displayName: username
-                }
-            },
-            timeout: 10000
-        });
-        
-        console.log(`📥 GraphQL Status: ${response.status}`);
-        
-        if (response.data && response.data.data && response.data.data.SearchPlayers && response.data.data.SearchPlayers.length > 0) {
-            const user = response.data.data.SearchPlayers.find(u => u.displayName.toLowerCase() === username.toLowerCase());
-            if (user) {
-                console.log(`✅ SUCCESS: Username "${username}" exists!`);
-                return {
-                    verified: true,
-                    username: user.displayName,
-                    accountId: user.accountId,
-                    source: 'epic-graphql'
-                };
-            }
-        }
-    } catch (error) {
-        console.log('❌ GraphQL method failed:', error.message);
-    }
-
-    try {
-        // Method 2: Epic Games public API
-        const response2 = await axios.get(`https://www.epicgames.com/account/v2/search/${encodeURIComponent(username)}`, {
             timeout: 10000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
+            validateStatus: (status) => status < 500
         });
         
-        console.log(`📥 Search API Status: ${response2.status}`);
+        console.log(`📥 Tracker Network Status: ${response.status}`);
         
-        if (response2.data && response2.data.length > 0) {
-            const user = response2.data.find(u => u.displayName.toLowerCase() === username.toLowerCase());
-            if (user) {
-                console.log(`✅ SUCCESS: Username "${username}" exists!`);
-                return {
-                    verified: true,
-                    username: user.displayName,
-                    accountId: user.accountId,
-                    source: 'epic-search'
-                };
-            }
-        }
-    } catch (error) {
-        console.log('❌ Search API failed:', error.message);
-    }
-
-    try {
-        // Method 3: Direct profile check
-        const response3 = await axios.get(`https://www.epicgames.com/account/v1/accounts/${username}`, {
-            timeout: 10000,
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            },
-            validateStatus: (status) => status < 500 // Accept any status except server errors
-        });
-        
-        console.log(`📥 Profile Check Status: ${response3.status}`);
-        
-        // If we get a 200 response, the user exists
-        if (response3.status === 200 && response3.data) {
-            console.log(`✅ SUCCESS: Username "${username}" exists!`);
+        if (response.status === 200 && response.data && response.data.data) {
+            console.log(`✅ SUCCESS: Username "${username}" verified!`);
             return {
                 verified: true,
-                username: username,
-                source: 'epic-profile'
+                username: response.data.data.platformInfo.platformUserHandle,
+                accountId: response.data.data.platformInfo.platformUserId,
+                source: 'tracker-network',
+                stats: response.data.data.segments[0]?.stats || {}
             };
+        } else if (response.status === 404) {
+            console.log(`❌ Username "${username}" not found on Tracker Network`);
+            return { verified: false, error: 'Username not found' };
+        } else {
+            console.log(`❌ Tracker Network error: ${response.status}`);
+            return { verified: false, error: `API error: ${response.status}` };
         }
     } catch (error) {
-        console.log('❌ Profile check failed:', error.message);
+        console.log('🚨 Tracker Network failed:', error.response?.status || error.message);
+        return { verified: false, error: 'Tracker Network unavailable' };
+    }
+};
+
+// Test API key
+const testTrackerAPI = async () => {
+    console.log('🧪 Testing Tracker Network API...');
+    console.log(`🔑 API Key: ${process.env.TRACKER_NETWORK_KEY ? 'Present' : 'MISSING'}`);
+    
+    if (!process.env.TRACKER_NETWORK_KEY) {
+        console.log('⚠️  No API key - using public access (rate limited)');
+        return true;
     }
 
-    // Final fallback: Manual verification
-    console.log('⚠️ Using MANUAL verification (all website checks failed)');
-    return { 
-        verified: true, 
-        username: username, 
-        manual: true,
-        note: 'All verification methods failed - manual fallback'
-    };
+    try {
+        // Test with a known username
+        const response = await axios.get('https://api.tracker.gg/api/v2/fortnite/standard/profile/epic/Ninja', {
+            headers: {
+                'TRN-Api-Key': process.env.TRACKER_NETWORK_KEY
+            },
+            timeout: 5000
+        });
+        
+        console.log('✅ Tracker Network API is WORKING!');
+        return true;
+    } catch (error) {
+        console.log('❌ Tracker Network test failed:', error.response?.status || error.message);
+        console.log('⚠️  Falling back to public access (rate limited)');
+        return true; // Still try without key
+    }
 };
 
 // Bot events
 client.once('ready', async () => {
     console.log(`\n✅ Logged in as ${client.user.tag}`);
     console.log(`🔗 Bot is in ${client.guilds.cache.size} servers`);
-    console.log('🚀 Bot ready - NO FORTNITE APIS USED');
+    
+    // Test API on startup
+    console.log('\n--- STARTUP TRACKER NETWORK TEST ---');
+    await testTrackerAPI();
+    console.log('--- STARTUP COMPLETE ---\n');
 });
 
 // Send verification message and wait for reactions
@@ -181,7 +143,7 @@ client.on('messageCreate', async (message) => {
         const fortniteUsername = args.slice(1).join(' ');
         console.log(`\n🎯 Override command from ${message.author.tag}: ${fortniteUsername}`);
 
-        const result = await verifyEpicUsername(fortniteUsername);
+        const result = await verifyWithTrackerNetwork(fortniteUsername);
 
         // Get the Fortnite channel
         const fortniteChannel = await client.channels.fetch(process.env.FORTNITE_CHANNEL_ID);
@@ -189,7 +151,7 @@ client.on('messageCreate', async (message) => {
 
         if (result.verified) {
             // Send to user
-            await message.author.send(`🎮 FORTNITE ACCOUNT VERIFIED\n🎯 Epic Games: ${result.username}${result.manual ? '\n⚠️ Manual verification' : ''}`);
+            await message.author.send(`🎮 FORTNITE ACCOUNT VERIFIED\n🎯 Epic Games: ${result.username}`);
 
             // Send to Fortnite channel
             const embed = new EmbedBuilder()
@@ -198,9 +160,9 @@ client.on('messageCreate', async (message) => {
                 .addFields(
                     { name: '👤 Discord User', value: `<@${message.author.id}>`, inline: true },
                     { name: '🎯 Epic Games', value: result.username, inline: true },
-                    { name: '🆔 Account ID', value: result.accountId || 'Not Available', inline: false },
+                    { name: '🆔 Account ID', value: result.accountId, inline: false },
                     { name: '⚠️ Method', value: 'Used !overide command', inline: true },
-                    { name: '🔍 Source', value: result.manual ? 'Manual' : result.source, inline: true }
+                    { name: '🔍 Source', value: 'Tracker Network', inline: true }
                 )
                 .setTimestamp();
 
@@ -211,7 +173,7 @@ client.on('messageCreate', async (message) => {
                 epicUsername: result.username,
                 accountId: result.accountId,
                 method: 'override',
-                source: result.source || 'manual',
+                source: 'tracker-network',
                 verifiedAt: new Date()
             });
 
@@ -237,6 +199,12 @@ client.on('messageCreate', async (message) => {
 
             console.log(`❌ Override FAILED for ${message.author.tag}: ${fortniteUsername}`);
         }
+    }
+
+    // Check API status
+    if (message.content.startsWith('!apistatus') && message.member.permissions.has('ADMINISTRATOR')) {
+        const apiStatus = await testTrackerAPI();
+        await message.reply(`Tracker Network API: ${apiStatus ? '✅ WORKING' : '❌ FAILED'}`);
     }
 });
 
@@ -293,14 +261,14 @@ client.on('messageCreate', async (message) => {
         console.log(`📨 DM from ${message.author.tag}: "${fortniteUsername}"`);
         
         // Verify the username
-        const result = await verifyEpicUsername(fortniteUsername);
+        const result = await verifyWithTrackerNetwork(fortniteUsername);
 
         // Get the Fortnite channel
         const fortniteChannel = await client.channels.fetch(process.env.FORTNITE_CHANNEL_ID);
 
         if (result.verified) {
             // Send success to user
-            await message.author.send(`🎮 FORTNITE ACCOUNT VERIFIED\n🎯 Epic Games: ${result.username}${result.manual ? '\n⚠️ Manual verification' : ''}`);
+            await message.author.send(`🎮 FORTNITE ACCOUNT VERIFIED\n🎯 Epic Games: ${result.username}`);
 
             // Send to Fortnite channel
             const embed = new EmbedBuilder()
@@ -309,9 +277,9 @@ client.on('messageCreate', async (message) => {
                 .addFields(
                     { name: '👤 Discord User', value: `<@${message.author.id}>`, inline: true },
                     { name: '🎯 Epic Games', value: result.username, inline: true },
-                    { name: '🆔 Account ID', value: result.accountId || 'Not Available', inline: false },
+                    { name: '🆔 Account ID', value: result.accountId, inline: false },
                     { name: '📝 Method', value: 'DM Verification', inline: true },
-                    { name: '🔍 Source', value: result.manual ? 'Manual' : result.source, inline: true }
+                    { name: '🔍 Source', value: 'Tracker Network', inline: true }
                 )
                 .setTimestamp();
 
@@ -322,7 +290,7 @@ client.on('messageCreate', async (message) => {
                 epicUsername: result.username,
                 accountId: result.accountId,
                 method: 'dm',
-                source: result.source || 'manual',
+                source: 'tracker-network',
                 verifiedAt: new Date()
             });
 
