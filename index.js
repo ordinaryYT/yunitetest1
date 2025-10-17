@@ -21,11 +21,10 @@ const EPIC_CONFIG = {
     redirectUri: process.env.REDIRECT_URI,
     authUrl: 'https://www.epicgames.com/id/authorize',
     tokenUrl: 'https://account-public-service-prod.ol.epicgames.com/account/api/oauth/token',
-    userInfoUrl: 'https://account-public-service-prod.ol.epicgames.com/account/api/oauth/verify',
-    fortniteServiceUrl: 'https://fortnite-public-service-prod11.ol.epicgames.com/fortnite/api'
+    userInfoUrl: 'https://account-public-service-prod.ol.epicgames.com/account/api/oauth/verify'
 };
 
-// Store temporary data (use a database in production)
+// Store temporary data
 const pendingAuths = new Map();
 const userConnections = new Map();
 
@@ -65,18 +64,6 @@ app.get('/auth/callback', async (req, res) => {
 
         const userInfo = userResponse.data;
         
-        // Get Fortnite account info
-        const fortniteResponse = await axios.get(
-            `${EPIC_CONFIG.fortniteServiceUrl}/game/v2/profile/${userInfo.accountId}/client/QueryProfile?profileId=athena`,
-            {
-                headers: {
-                    'Authorization': `Bearer ${accessToken}`
-                }
-            }
-        );
-
-        const fortniteData = fortniteResponse.data;
-
         // Get pending auth data
         const authData = pendingAuths.get(state);
         if (!authData) {
@@ -88,7 +75,7 @@ app.get('/auth/callback', async (req, res) => {
         // Store user connection
         userConnections.set(userId, {
             epicUsername: userInfo.displayName,
-            fortniteAccountId: userInfo.accountId,
+            accountId: userInfo.accountId,
             lastUpdated: new Date()
         });
 
@@ -159,7 +146,8 @@ client.on('messageCreate', async (message) => {
             channelId: process.env.FORTNITE_CHANNEL_ID || message.channel.id
         });
 
-        const authUrl = `${EPIC_CONFIG.authUrl}?client_id=${EPIC_CONFIG.clientId}&response_type=code&redirect_uri=${encodeURIComponent(EPIC_CONFIG.redirectUri)}&state=${state}&scope=basic_profile+friends_list+openid+fortnite`;
+        // Fixed URL structure to match Yunite
+        const authUrl = `${EPIC_CONFIG.authUrl}?client_id=${EPIC_CONFIG.clientId}&redirect_uri=${encodeURIComponent(EPIC_CONFIG.redirectUri)}&response_type=code&scope=basic_profile&state=${state}`;
 
         const row = new ActionRowBuilder()
             .addComponents(
