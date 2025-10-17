@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder } = require('discord.js');
 const express = require('express');
 const axios = require('axios');
 require('dotenv').config();
@@ -22,34 +22,26 @@ const userConnections = new Map();
 
 app.use(express.json());
 
-// FortniteTracker verification
-const verifyWithFortniteTracker = async (username) => {
+// FortniteAPI.io verification
+const verifyFortniteUsername = async (username) => {
     try {
-        const response = await axios.get(`https://api.fortnitetracker.com/v1/profile/epic/${encodeURIComponent(username)}`, {
+        const response = await axios.get(`https://fortniteapi.io/v1/lookup?username=${encodeURIComponent(username)}`, {
             headers: {
-                'TRN-Api-Key': process.env.FORTNITE_TRACKER_KEY
+                'Authorization': process.env.FORTNITE_API_IO_KEY
             }
         });
         
-        if (response.data && response.data.accountId) {
+        if (response.data.result) {
             return {
                 verified: true,
-                data: {
-                    username: response.data.epicUserHandle,
-                    accountId: response.data.accountId,
-                    platform: response.data.platformName,
-                    stats: {
-                        wins: response.data.lifeTimeStats?.find(s => s.key === 'Wins')?.value || '0',
-                        matches: response.data.lifeTimeStats?.find(s => s.key === 'Matches Played')?.value || '0',
-                        kills: response.data.lifeTimeStats?.find(s => s.key === 'Kills')?.value || '0'
-                    }
-                }
+                username: response.data.account.name,
+                accountId: response.data.account.id
             };
         }
     } catch (error) {
-        return { verified: false, error: 'Username not found or invalid' };
+        console.error('FortniteAPI.io error:', error.response?.data || error.message);
     }
-    return { verified: false, error: 'Username not found' };
+    return { verified: false };
 };
 
 // Bot events
@@ -97,14 +89,14 @@ client.on('messageCreate', async (message) => {
         }
 
         const fortniteUsername = args.slice(1).join(' ');
-        const result = await verifyWithFortniteTracker(fortniteUsername);
+        const result = await verifyFortniteUsername(fortniteUsername);
 
         // Get the Fortnite channel
         const fortniteChannel = await client.channels.fetch(process.env.FORTNITE_CHANNEL_ID);
 
         if (result.verified) {
             // Send to user
-            await message.author.send(`🎮 FORTNITE ACCOUNT VERIFIED\n🎯 Epic Games: ${result.data.username}`);
+            await message.author.send(`🎮 FORTNITE ACCOUNT VERIFIED\n🎯 Epic Games: ${result.username}`);
 
             // Send to Fortnite channel
             const embed = new EmbedBuilder()
@@ -112,8 +104,8 @@ client.on('messageCreate', async (message) => {
                 .setColor(0x00FF00)
                 .addFields(
                     { name: '👤 Discord User', value: `<@${message.author.id}>`, inline: true },
-                    { name: '🎯 Epic Games', value: result.data.username, inline: true },
-                    { name: '🆔 Account ID', value: result.data.accountId, inline: false },
+                    { name: '🎯 Epic Games', value: result.username, inline: true },
+                    { name: '🆔 Account ID', value: result.accountId, inline: false },
                     { name: '⚠️ Method', value: 'Used !overide command', inline: true }
                 )
                 .setTimestamp();
@@ -122,8 +114,8 @@ client.on('messageCreate', async (message) => {
 
             // Store user connection
             userConnections.set(message.author.id, {
-                epicUsername: result.data.username,
-                accountId: result.data.accountId,
+                epicUsername: result.username,
+                accountId: result.accountId,
                 method: 'override',
                 verifiedAt: new Date()
             });
@@ -197,14 +189,14 @@ client.on('messageCreate', async (message) => {
         const fortniteUsername = message.content.trim();
         
         // Verify the username
-        const result = await verifyWithFortniteTracker(fortniteUsername);
+        const result = await verifyFortniteUsername(fortniteUsername);
 
         // Get the Fortnite channel
         const fortniteChannel = await client.channels.fetch(process.env.FORTNITE_CHANNEL_ID);
 
         if (result.verified) {
             // Send success to user
-            await message.author.send(`🎮 FORTNITE ACCOUNT VERIFIED\n🎯 Epic Games: ${result.data.username}`);
+            await message.author.send(`🎮 FORTNITE ACCOUNT VERIFIED\n🎯 Epic Games: ${result.username}`);
 
             // Send to Fortnite channel
             const embed = new EmbedBuilder()
@@ -212,10 +204,9 @@ client.on('messageCreate', async (message) => {
                 .setColor(0x00FF00)
                 .addFields(
                     { name: '👤 Discord User', value: `<@${message.author.id}>`, inline: true },
-                    { name: '🎯 Epic Games', value: result.data.username, inline: true },
-                    { name: '🆔 Account ID', value: result.data.accountId, inline: false },
-                    { name: '📊 Wins', value: result.data.stats.wins, inline: true },
-                    { name: '🎯 Kills', value: result.data.stats.kills, inline: true }
+                    { name: '🎯 Epic Games', value: result.username, inline: true },
+                    { name: '🆔 Account ID', value: result.accountId, inline: false },
+                    { name: '📝 Method', value: 'DM Verification', inline: true }
                 )
                 .setTimestamp();
 
@@ -223,8 +214,8 @@ client.on('messageCreate', async (message) => {
 
             // Store user connection
             userConnections.set(message.author.id, {
-                epicUsername: result.data.username,
-                accountId: result.data.accountId,
+                epicUsername: result.username,
+                accountId: result.accountId,
                 method: 'dm',
                 verifiedAt: new Date()
             });
