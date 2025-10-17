@@ -22,136 +22,119 @@ const userConnections = new Map();
 
 app.use(express.json());
 
-// Test API key function for FortniteAPI.com
-const testAPIKey = async () => {
-    console.log('🧪 Testing FortniteAPI.com key...');
-    console.log(`🔑 API Key: ${process.env.FORTNITE_API_KEY ? 'Present' : 'MISSING'}`);
+// Check Epic Games website directly - NO FORTNITE APIS
+const verifyEpicUsername = async (username) => {
+    console.log(`\n🔍 Checking Epic Games website for: "${username}"`);
     
-    if (!process.env.FORTNITE_API_KEY) {
-        console.log('❌ FORTNITE_API_KEY is not set in environment variables');
-        return false;
-    }
-
     try {
-        const response = await axios.get('https://fortniteapi.com/v1/test', {
+        // Method 1: Epic Games account lookup endpoint
+        const response = await axios.get(`https://graphql.epicgames.com/graphql`, {
+            method: 'POST',
             headers: {
-                'Authorization': process.env.FORTNITE_API_KEY
+                'Content-Type': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             },
-            timeout: 5000
-        });
-        console.log('✅ API Key is WORKING! Status:', response.data);
-        return true;
-    } catch (error) {
-        console.log('❌ API Key TEST FAILED:');
-        console.log('   Status:', error.response?.status);
-        console.log('   Error:', error.response?.data || error.message);
-        return false;
-    }
-};
-
-// FortniteAPI.com verification
-const verifyFortniteUsername = async (username) => {
-    console.log(`\n🔍 Starting verification for: "${username}"`);
-    
-    // Test API key first
-    const apiWorking = await testAPIKey();
-    if (!apiWorking) {
-        console.log('⚠️ Using MANUAL verification (API not working)');
-        return { 
-            verified: true, 
-            username: username, 
-            manual: true,
-            note: 'API not available - manual verification'
-        };
-    }
-
-    try {
-        const apiUrl = `https://fortniteapi.com/v1/lookup?username=${encodeURIComponent(username)}`;
-        console.log(`🌐 Making request to: ${apiUrl}`);
-        
-        const response = await axios.get(apiUrl, {
-            headers: {
-                'Authorization': process.env.FORTNITE_API_KEY
+            data: {
+                query: `
+                    query SearchPlayers($displayName: String!) {
+                        SearchPlayers(displayName: $displayName) {
+                            accountId
+                            displayName
+                        }
+                    }
+                `,
+                variables: {
+                    displayName: username
+                }
             },
             timeout: 10000
         });
         
-        console.log(`📥 Response Status: ${response.status}`);
-        console.log(`📊 Response Data:`, JSON.stringify(response.data, null, 2));
+        console.log(`📥 GraphQL Status: ${response.status}`);
         
-        if (response.data && response.data.result) {
-            console.log(`✅ SUCCESS: Username "${username}" verified as "${response.data.account.name}"`);
-            return {
-                verified: true,
-                username: response.data.account.name,
-                accountId: response.data.account.id,
-                source: 'fortniteapi.com'
-            };
-        } else {
-            console.log(`❌ Username "${username}" not found in API`);
-            return { 
-                verified: false,
-                error: 'Username not found in FortniteAPI.com'
-            };
-        }
-    } catch (error) {
-        console.log('🚨 API Request Failed:');
-        console.log('   Status:', error.response?.status);
-        console.log('   Error Data:', error.response?.data);
-        console.log('   Message:', error.message);
-        
-        // Fallback to Epic Games website check
-        console.log('🔄 Trying Epic Games website fallback...');
-        const websiteCheck = await checkEpicWebsite(username);
-        if (websiteCheck.verified) {
-            return websiteCheck;
-        }
-        
-        console.log('⚠️ Falling back to MANUAL verification');
-        return { 
-            verified: true, 
-            username: username, 
-            manual: true,
-            note: 'All APIs failed - manual verification'
-        };
-    }
-};
-
-// Fallback: Check Epic Games website directly (no API key needed)
-const checkEpicWebsite = async (username) => {
-    try {
-        console.log(`🌐 Checking Epic Games website for: "${username}"`);
-        const response = await axios.get(`https://fortniteapi.com/v1/lookup?username=${encodeURIComponent(username)}`, {
-            timeout: 10000
-        });
-        
-        if (response.data && response.data.length > 0) {
-            const user = response.data.find(u => u.displayName.toLowerCase() === username.toLowerCase());
+        if (response.data && response.data.data && response.data.data.SearchPlayers && response.data.data.SearchPlayers.length > 0) {
+            const user = response.data.data.SearchPlayers.find(u => u.displayName.toLowerCase() === username.toLowerCase());
             if (user) {
-                console.log(`✅ Website check SUCCESS: ${user.displayName}`);
+                console.log(`✅ SUCCESS: Username "${username}" exists!`);
                 return {
                     verified: true,
                     username: user.displayName,
-                    accountId: user.id,
-                    source: 'epic-website'
+                    accountId: user.accountId,
+                    source: 'epic-graphql'
                 };
             }
         }
     } catch (error) {
-        console.log('❌ Epic website check failed:', error.message);
+        console.log('❌ GraphQL method failed:', error.message);
     }
-    return { verified: false };
+
+    try {
+        // Method 2: Epic Games public API
+        const response2 = await axios.get(`https://www.epicgames.com/account/v2/search/${encodeURIComponent(username)}`, {
+            timeout: 10000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        });
+        
+        console.log(`📥 Search API Status: ${response2.status}`);
+        
+        if (response2.data && response2.data.length > 0) {
+            const user = response2.data.find(u => u.displayName.toLowerCase() === username.toLowerCase());
+            if (user) {
+                console.log(`✅ SUCCESS: Username "${username}" exists!`);
+                return {
+                    verified: true,
+                    username: user.displayName,
+                    accountId: user.accountId,
+                    source: 'epic-search'
+                };
+            }
+        }
+    } catch (error) {
+        console.log('❌ Search API failed:', error.message);
+    }
+
+    try {
+        // Method 3: Direct profile check
+        const response3 = await axios.get(`https://www.epicgames.com/account/v1/accounts/${username}`, {
+            timeout: 10000,
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            },
+            validateStatus: (status) => status < 500 // Accept any status except server errors
+        });
+        
+        console.log(`📥 Profile Check Status: ${response3.status}`);
+        
+        // If we get a 200 response, the user exists
+        if (response3.status === 200 && response3.data) {
+            console.log(`✅ SUCCESS: Username "${username}" exists!`);
+            return {
+                verified: true,
+                username: username,
+                source: 'epic-profile'
+            };
+        }
+    } catch (error) {
+        console.log('❌ Profile check failed:', error.message);
+    }
+
+    // Final fallback: Manual verification
+    console.log('⚠️ Using MANUAL verification (all website checks failed)');
+    return { 
+        verified: true, 
+        username: username, 
+        manual: true,
+        note: 'All verification methods failed - manual fallback'
+    };
 };
 
 // Bot events
 client.once('ready', async () => {
     console.log(`\n✅ Logged in as ${client.user.tag}`);
     console.log(`🔗 Bot is in ${client.guilds.cache.size} servers`);
-    
-    // Test API key on startup
-    console.log('\n--- STARTUP API TEST ---');
-    await testAPIKey();
-    console.log('--- STARTUP COMPLETE ---\n');
+    console.log('🚀 Bot ready - NO FORTNITE APIS USED');
 });
 
 // Send verification message and wait for reactions
@@ -198,7 +181,7 @@ client.on('messageCreate', async (message) => {
         const fortniteUsername = args.slice(1).join(' ');
         console.log(`\n🎯 Override command from ${message.author.tag}: ${fortniteUsername}`);
 
-        const result = await verifyFortniteUsername(fortniteUsername);
+        const result = await verifyEpicUsername(fortniteUsername);
 
         // Get the Fortnite channel
         const fortniteChannel = await client.channels.fetch(process.env.FORTNITE_CHANNEL_ID);
@@ -206,7 +189,7 @@ client.on('messageCreate', async (message) => {
 
         if (result.verified) {
             // Send to user
-            await message.author.send(`🎮 FORTNITE ACCOUNT VERIFIED\n🎯 Epic Games: ${result.username}${result.manual ? '\n⚠️ Manual verification (API unavailable)' : ''}`);
+            await message.author.send(`🎮 FORTNITE ACCOUNT VERIFIED\n🎯 Epic Games: ${result.username}${result.manual ? '\n⚠️ Manual verification' : ''}`);
 
             // Send to Fortnite channel
             const embed = new EmbedBuilder()
@@ -215,7 +198,7 @@ client.on('messageCreate', async (message) => {
                 .addFields(
                     { name: '👤 Discord User', value: `<@${message.author.id}>`, inline: true },
                     { name: '🎯 Epic Games', value: result.username, inline: true },
-                    { name: '🆔 Account ID', value: result.accountId || 'Manual Verification', inline: false },
+                    { name: '🆔 Account ID', value: result.accountId || 'Not Available', inline: false },
                     { name: '⚠️ Method', value: 'Used !overide command', inline: true },
                     { name: '🔍 Source', value: result.manual ? 'Manual' : result.source, inline: true }
                 )
@@ -254,12 +237,6 @@ client.on('messageCreate', async (message) => {
 
             console.log(`❌ Override FAILED for ${message.author.tag}: ${fortniteUsername}`);
         }
-    }
-
-    // Debug command to check API status
-    if (message.content.startsWith('!apistatus') && message.member.permissions.has('ADMINISTRATOR')) {
-        const apiStatus = await testAPIKey();
-        await message.reply(`API Status: ${apiStatus ? '✅ WORKING' : '❌ FAILED'}`);
     }
 });
 
@@ -316,14 +293,14 @@ client.on('messageCreate', async (message) => {
         console.log(`📨 DM from ${message.author.tag}: "${fortniteUsername}"`);
         
         // Verify the username
-        const result = await verifyFortniteUsername(fortniteUsername);
+        const result = await verifyEpicUsername(fortniteUsername);
 
         // Get the Fortnite channel
         const fortniteChannel = await client.channels.fetch(process.env.FORTNITE_CHANNEL_ID);
 
         if (result.verified) {
             // Send success to user
-            await message.author.send(`🎮 FORTNITE ACCOUNT VERIFIED\n🎯 Epic Games: ${result.username}${result.manual ? '\n⚠️ Manual verification (API unavailable)' : ''}`);
+            await message.author.send(`🎮 FORTNITE ACCOUNT VERIFIED\n🎯 Epic Games: ${result.username}${result.manual ? '\n⚠️ Manual verification' : ''}`);
 
             // Send to Fortnite channel
             const embed = new EmbedBuilder()
@@ -332,7 +309,7 @@ client.on('messageCreate', async (message) => {
                 .addFields(
                     { name: '👤 Discord User', value: `<@${message.author.id}>`, inline: true },
                     { name: '🎯 Epic Games', value: result.username, inline: true },
-                    { name: '🆔 Account ID', value: result.accountId || 'Manual Verification', inline: false },
+                    { name: '🆔 Account ID', value: result.accountId || 'Not Available', inline: false },
                     { name: '📝 Method', value: 'DM Verification', inline: true },
                     { name: '🔍 Source', value: result.manual ? 'Manual' : result.source, inline: true }
                 )
